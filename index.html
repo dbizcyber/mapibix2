@@ -20,6 +20,7 @@
   <script src="https://cdnjs.cloudflare.com/ajax/libs/togeojson/0.16.0/togeojson.min.js"></script>
   <script src="https://unpkg.com/togpx@0.5.0/togpx.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/jquery/1.12.4/jquery.min.js" crossorigin=""></script>
+  <script src="https://unpkg.com/nosleep.js@0.12.0/dist/NoSleep.min.js"></script>
 <style>
 :root {
   --green:     #1b4332;
@@ -515,10 +516,25 @@ html, body { height: 100%; font-family: -apple-system, 'Segoe UI', Arial, sans-s
 <div id="startupPopup">
   <div class="popup-box">
     <h3>🥾 MapiBiBi — Bienvenue</h3>
-    <p style="font-size:12px;margin-bottom:6px;opacity:.6">v7.4 — Avril 2026</p>
-    <p>Nouveautés : <b>Satellite ESRI</b> — fond de carte satellite gratuit · <b>Sentiers sur satellite</b> — surcouche Thunderforest 70% · <b>Boucle</b> — 2 points sur la carte, ORS calcule le circuit.</p>
+    <p style="font-size:12px;margin-bottom:6px;opacity:.6">v7.5 — Avril 2026</p>
+    <p>Nouveautés : <b>Satellite ESRI</b> · <b>Sentiers sur satellite</b> · <b>Boucle</b> 2 points · <b>Enregistrement</b> — choix tracé GPS ou recalcul sur sentiers à l'arrêt.</p>
     <p style="font-size:11px;margin-top:8px;opacity:.55">Tapez la carte pour tracer · swipez le panneau bas · ⚙️ Options pour les couches</p>
     <button onclick="closeStartupPopup()">C'est parti 🥾</button>
+  </div>
+</div>
+
+<div id="recChoixPopup" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,.65); align-items:center; justify-content:center; z-index:5000;">
+  <div class="popup-box">
+    <h3>⏹️ Enregistrement terminé</h3>
+    <p id="rec-choix-info" style="font-size:13px; color:rgba(255,255,255,.65); margin-bottom:16px;"></p>
+    <button onclick="afficherTraceBrut()" style="width:100%; padding:12px; background:rgba(255,255,255,.1); border:none; border-radius:10px; color:#fff; font-size:14px; font-weight:600; cursor:pointer; margin-bottom:10px;">
+      📍 Tracé GPS brut
+      <span style="display:block; font-size:11px; font-weight:400; opacity:.55; margin-top:3px;">Fidèle à votre parcours réel</span>
+    </button>
+    <button onclick="afficherTraceSentiers()" style="width:100%; padding:12px; background:rgba(57,255,20,.15); border:none; border-radius:10px; color:#9aff72; font-size:14px; font-weight:600; cursor:pointer;">
+      🥾 Recalculer sur les sentiers
+      <span style="display:block; font-size:11px; font-weight:400; opacity:.7; margin-top:3px;">ORS snape sur les chemins OSM</span>
+    </button>
   </div>
 </div>
 
@@ -1112,22 +1128,89 @@ function toggleAutoRecording(){
     livePolyline=null; routeLayer.clearLayers();
     btn.classList.add('recording');
     btn.querySelector('.tab-icon').textContent='⏹️';
+    /* Empêcher la mise en veille pendant l'enregistrement */
+    activerWakeLock();
     showToast("Enregistrement GPS démarré");
-  }
-  else{
+  } else {
     btn.classList.remove('recording'); btn.querySelector('.tab-icon').textContent='⏺️';
-    livePolyline=null; /* libérer la référence live */
-    if(recTrace.length>2){
-      manualCoords=recTrace.map(p=>[p.lat,p.lng,p.ele||0]);
-      routeLayer.clearLayers();
-      L.polyline(recTrace.map(p=>[p.lat,p.lng]),{color:"#e53e3e",weight:3,smoothFactor:1.5}).addTo(routeLayer);
-      const recLls = recTrace.map(p=>[p.lat,p.lng]);
-      mkEditable(recLls); updateStartEndMarkers(recLls);
-      drawElevation(recTrace.map(p=>p.ele||0),recLls);
-      saveLocal(); showChartArea(true);
+    livePolyline=null;
+    /* Libérer le wake lock */
+    desactiverWakeLock();
+    if(recTrace.length > 2){
+      /* Afficher le modal de choix */
+      document.getElementById('rec-choix-info').textContent =
+        `${recTrace.length} points enregistrés — comment afficher la trace ?`;
+      const pop = document.getElementById('recChoixPopup');
+      pop.style.display = 'flex';
+    } else {
+      showToast(`Enregistrement arrêté — pas assez de points`);
     }
-    showToast(`Enregistrement arrêté — ${recTrace.length} points enregistrés`);
   }
+}
+
+/* ── WAKE LOCK — empêche la mise en veille pendant l'enregistrement ── */
+let _noSleep = null;
+let _wakeLock = null;
+
+async function activerWakeLock(){
+  /* 1. WakeLock API (Android Chrome, Safari 16.4+) */
+  if('wakeLock' in navigator){
+    try{
+      _wakeLock = await navigator.wakeLock.request('screen');
+      console.log('[WakeLock] actif');
+      return;
+    }catch(e){ console.warn('[WakeLock] échec:', e.message); }
+  }
+  /* 2. Fallback NoSleep.js */
+  try{
+    if(!_noSleep) _noSleep = new NoSleep();
+    await _noSleep.enable();
+    console.log('[NoSleep] actif');
+  }catch(e){ console.warn('[NoSleep] échec:', e.message); }
+}
+
+function desactiverWakeLock(){
+  if(_wakeLock){ _wakeLock.release().catch(()=>{}); _wakeLock = null; }
+  if(_noSleep && _noSleep.isEnabled){ _noSleep.disable(); }
+}
+
+/* Réactiver le wake lock si l'onglet redevient visible pendant l'enregistrement */
+document.addEventListener('visibilitychange', async ()=>{
+  if(document.visibilityState === 'visible' && gpsTracking) activerWakeLock();
+});
+
+/* ── AFFICHAGE APRÈS ENREGISTREMENT ── */
+function afficherTraceBrut(){
+  document.getElementById('recChoixPopup').style.display = 'none';
+  manualCoords = recTrace.map(p=>[p.lat, p.lng, p.ele||0]);
+  routeLayer.clearLayers();
+  const lls = recTrace.map(p=>[p.lat, p.lng]);
+  L.polyline(lls, {color:"#e53e3e", weight:3, smoothFactor:1.5}).addTo(routeLayer);
+  mkEditable(lls); updateStartEndMarkers(lls);
+  drawElevation(recTrace.map(p=>p.ele||0), lls);
+  saveLocal(); showChartArea(true);
+  showToast(`Tracé GPS brut — ${recTrace.length} points`);
+}
+
+async function afficherTraceSentiers(){
+  document.getElementById('recChoixPopup').style.display = 'none';
+  /* Simplifier recTrace : garder au max 40 points équidistants */
+  const pts = simplifierTrace(recTrace, 40);
+  manualPts = pts.map(p=>[p.lng, p.lat]);
+  routeLayer.clearLayers(); editMarkers.clearLayers();
+  showToast('⏳ Recalcul sur les sentiers…', 4000);
+  await rebuildRoute();
+  showChartArea(true);
+}
+
+function simplifierTrace(trace, maxPts){
+  if(trace.length <= maxPts) return trace;
+  const step = (trace.length - 1) / (maxPts - 1);
+  const result = [];
+  for(let i = 0; i < maxPts; i++){
+    result.push(trace[Math.round(i * step)]);
+  }
+  return result;
 }
 
 /* ── RECHERCHE ── */
