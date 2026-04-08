@@ -19,6 +19,7 @@ const LIB_FILES = [
   "https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js",
   "https://cdnjs.cloudflare.com/ajax/libs/togeojson/0.16.0/togeojson.min.js",
   "https://unpkg.com/togpx@0.5.0/togpx.js",
+  "https://unpkg.com/nosleep.js@0.12.0/dist/NoSleep.min.js",
   "https://cdnjs.cloudflare.com/ajax/libs/jquery/1.12.4/jquery.min.js",
   "https://upload.wikimedia.org/wikipedia/commons/e/ec/RedDot.svg",
 ];
