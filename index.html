@@ -354,21 +354,11 @@ html, body { height: 100%; font-family: -apple-system, 'Segoe UI', Arial, sans-s
   </div>
 
   <!-- PANNEAU BOUCLE -->
-  <div id="boucle-panel" style="display:none; padding:10px 14px 6px; border-top:1px solid rgba(255,255,255,.07);">
-    <div style="font-size:12px; color:rgba(255,255,255,.55); margin-bottom:8px;">Distance cible de la boucle</div>
-    <div style="display:flex; gap:10px; align-items:center;">
-      <input
-        id="boucle-dist"
-        type="number"
-        min="1" max="100" step="0.5"
-        value="10"
-        inputmode="decimal"
-        style="flex:1; background:rgba(255,255,255,.1); border:none; border-radius:10px; padding:10px 12px; font-size:16px; color:#fff; outline:none; -webkit-appearance:none; -webkit-user-select:text;"
-      >
-      <span style="font-size:14px; color:rgba(255,255,255,.5); flex-shrink:0;">km</span>
-      <button onclick="lancerBoucle()" style="background:rgba(57,255,20,.18); border:none; border-radius:10px; padding:10px 16px; color:#9aff72; font-size:13px; font-weight:600; cursor:pointer; white-space:nowrap;">Générer</button>
+  <div id="boucle-panel" style="display:none; padding:10px 14px 8px; border-top:1px solid rgba(255,255,255,.07);">
+    <div id="boucle-status" style="font-size:13px; color:rgba(255,255,255,.75); min-height:18px; text-align:center; padding:4px 0 2px;"></div>
+    <div style="display:flex; justify-content:center; margin-top:6px;">
+      <button id="boucle-annuler-btn" onclick="annulerBoucle()" style="display:none; background:rgba(229,62,62,.18); border:none; border-radius:10px; padding:8px 20px; color:#fc8181; font-size:13px; font-weight:600; cursor:pointer;">Annuler</button>
     </div>
-    <div id="boucle-status" style="font-size:11px; color:rgba(255,255,255,.4); margin-top:6px; min-height:16px;"></div>
   </div>
 
   <div id="sheet-chart-area">
@@ -783,6 +773,17 @@ async function rebuildRoute(){
 /* ── CLIC CARTE ── */
 map.on('click',e=>{
   if(modeAB) return;
+
+  /* Mode boucle : intercepter les 2 taps */
+  if(modeBoucle){
+    if(importedTrace){
+      if(!confirm("Une trace GPX est chargée.\nLa boucle va l'effacer. Continuer ?")) return;
+      importedTrace=false; manualCoords=[]; routeLayer.clearLayers(); editMarkers.clearLayers();
+    }
+    boucleHandleTap(e.latlng);
+    return;
+  }
+
   if(importedTrace){
     if(!confirm("Une trace GPX est chargée.\nUn clic va démarrer un nouveau tracé et l'effacer. Continuer ?")) return;
     importedTrace=false; manualCoords=[]; routeLayer.clearLayers(); editMarkers.clearLayers();
@@ -1478,55 +1479,112 @@ if('serviceWorker' in navigator){
   });
 }
 /* ── BOUCLE ── */
+let modeBoucle   = false;
+let boucleDepart = null;   /* [lng, lat] */
+let boucleMarkerD = null;  /* marqueur provisoire départ boucle */
+let boucleMarkerA = null;  /* marqueur provisoire arrivée boucle */
+
+function setBoucleStatus(txt){ document.getElementById('boucle-status').textContent = txt; }
+
 function openBouclePanel(){
   const panel = document.getElementById('boucle-panel');
   const btn   = document.getElementById('btn-boucle');
   const isOpen = panel.style.display !== 'none';
-  panel.style.display = isOpen ? 'none' : 'block';
-  btn.classList.toggle('is-active', !isOpen);
-  if(!isOpen){
-    const sh = document.getElementById('bottom-sheet');
-    sh.classList.remove('collapsed'); sh.classList.add('expanded');
-    setTimeout(()=>document.getElementById('boucle-dist').focus(), 300);
+  if(isOpen){ annulerBoucle(); return; }
+  panel.style.display = 'block';
+  btn.classList.add('is-active');
+  const sh = document.getElementById('bottom-sheet');
+  sh.classList.remove('collapsed'); sh.classList.add('expanded');
+  /* Démarrer le mode : attente du 1er tap */
+  modeBoucle   = true;
+  boucleDepart = null;
+  document.getElementById('boucle-annuler-btn').style.display = 'inline-block';
+  setBoucleStatus('Tapez le point de départ sur la carte');
+  showToast('Mode boucle — tapez le départ');
+}
+
+function annulerBoucle(){
+  modeBoucle   = false;
+  boucleDepart = null;
+  /* Retirer les marqueurs provisoires */
+  if(boucleMarkerD){ map.removeLayer(boucleMarkerD); boucleMarkerD = null; }
+  if(boucleMarkerA){ map.removeLayer(boucleMarkerA); boucleMarkerA = null; }
+  document.getElementById('boucle-panel').style.display = 'none';
+  document.getElementById('btn-boucle').classList.remove('is-active');
+  document.getElementById('boucle-annuler-btn').style.display = 'none';
+  setBoucleStatus('');
+}
+
+function boucleHandleTap(latlng){
+  if(!boucleDepart){
+    /* 1er tap : point de départ */
+    boucleDepart = [latlng.lng, latlng.lat];
+    if(boucleMarkerD){ map.removeLayer(boucleMarkerD); }
+    boucleMarkerD = L.marker([latlng.lat, latlng.lng], {
+      icon: L.divIcon({
+        className:'',
+        html:'<div style="width:22px;height:22px;border-radius:50%;background:#16a34a;border:3px solid #fff;box-shadow:0 2px 6px rgba(0,0,0,.5);display:flex;align-items:center;justify-content:center;font-size:11px;color:#fff;font-weight:700">D</div>',
+        iconSize:[22,22], iconAnchor:[11,11]
+      })
+    }).addTo(map).bindTooltip('Départ boucle', {direction:'top', offset:[0,-14]});
+    setBoucleStatus('Tapez le point d\'arrivée sur la carte');
+    showToast('Départ posé — tapez l\'arrivée');
+  } else {
+    /* 2ème tap : point d'arrivée → calcul */
+    const arrivee = [latlng.lng, latlng.lat];
+    if(boucleMarkerA){ map.removeLayer(boucleMarkerA); }
+    boucleMarkerA = L.marker([latlng.lat, latlng.lng], {
+      icon: L.divIcon({
+        className:'',
+        html:'<div style="width:22px;height:22px;border-radius:50%;background:#dc2626;border:3px solid #fff;box-shadow:0 2px 6px rgba(0,0,0,.5);display:flex;align-items:center;justify-content:center;font-size:11px;color:#fff;font-weight:700">A</div>',
+        iconSize:[22,22], iconAnchor:[11,11]
+      })
+    }).addTo(map).bindTooltip('Arrivée boucle', {direction:'top', offset:[0,-14]});
+    setBoucleStatus('⏳ Calcul de la boucle…');
+    modeBoucle = false; /* plus d'interception de taps pendant le calcul */
+    genererBoucle(boucleDepart, arrivee);
   }
 }
 
-function lancerBoucle(){
-  const km = parseFloat(document.getElementById('boucle-dist').value);
-  const status = document.getElementById('boucle-status');
-  if(isNaN(km) || km < 1 || km > 100){ status.textContent = '⚠️ Distance entre 1 et 100 km'; return; }
-  if(!manualPts.length){ status.textContent = '⚠️ Tapez d\'abord un point de départ sur la carte'; return; }
-  status.textContent = '⏳ Calcul en cours…';
+async function genererBoucle(depart, arrivee){
+  /* Retirer les marqueurs provisoires — rebuildRoute posera D/A définitifs */
+  if(boucleMarkerD){ map.removeLayer(boucleMarkerD); boucleMarkerD = null; }
+  if(boucleMarkerA){ map.removeLayer(boucleMarkerA); boucleMarkerA = null; }
+
+  /* Calcul du pivot perpendiculaire au milieu D-A, décalé de |DA|/2 */
+  const pivot = calculerPivot(depart, arrivee);
+
+  /* Waypoints : D → pivot → A → D  (boucle fermée) */
+  manualPts = [ depart, pivot, arrivee, [depart[0], depart[1]] ];
   routeLayer.clearLayers(); editMarkers.clearLayers();
-  genererBoucle(km);
-}
 
-async function genererBoucle(km){
-  const status = document.getElementById('boucle-status');
-  const depart = manualPts[0];
-  const jalons = construireJalonsProvisoires(depart, km);
-  /* Fermer la boucle : dernier jalon = point de départ */
-  jalons.push([depart[0], depart[1]]);
-  manualPts = jalons;
-  status.textContent = `⏳ Routage (${jalons.length} jalons via ORS)…`;
   await rebuildRoute();
-  status.textContent = `✅ Boucle calculée — distance réelle affichée ci-dessus`;
+
+  setBoucleStatus('✅ Boucle calculée');
+  /* Refermer le panneau après 2s */
+  setTimeout(()=>{ annulerBoucle(); showChartArea(true); }, 2000);
 }
 
-function construireJalonsProvisoires(depart, km){
-  /* Rayon théorique : C = 2πr  →  r = km/(2π) */
-  const r_lat = (km / (2 * Math.PI)) / 111;
-  const r_lng = r_lat / Math.cos(depart[1] * Math.PI / 180);
-  const jalons = [];
-  const N = 6;
-  for(let i = 0; i < N; i++){
-    const angle = (2 * Math.PI * i) / N - Math.PI / 2;
-    jalons.push([
-      depart[0] + r_lng * Math.cos(angle),
-      depart[1] + r_lat * Math.sin(angle)
-    ]);
-  }
-  return jalons;
+function calculerPivot(depart, arrivee){
+  /* Milieu du segment D-A */
+  const mLng = (depart[0] + arrivee[0]) / 2;
+  const mLat = (depart[1] + arrivee[1]) / 2;
+
+  /* Vecteur D→A en degrés */
+  const dLng = arrivee[0] - depart[0];
+  const dLat = arrivee[1] - depart[1];
+
+  /* Distance |DA| en degrés (approx) — on décale de |DA|/2 en perpendiculaire */
+  const len = Math.sqrt(dLng * dLng + dLat * dLat);
+  if(len === 0) return [depart[0], depart[1] + 0.01];
+
+  /* Perpendiculaire normalisée (rotation 90°) */
+  const pLng = -dLat / len;
+  const pLat =  dLng / len;
+
+  /* Décalage = |DA|/2 → boucle de périmètre ≈ π × |DA| */
+  const offset = len / 2;
+  return [ mLng + pLng * offset, mLat + pLat * offset ];
 }
 
 window.addEventListener('load',()=>{
