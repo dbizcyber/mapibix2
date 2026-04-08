@@ -417,6 +417,11 @@ html, body { height: 100%; font-family: -apple-system, 'Segoe UI', Arial, sans-s
       <div class="opt-text"><div class="opt-label">Points de tracé</div><div class="opt-desc">Afficher les points intermédiaires</div></div>
       <span class="opt-arrow" id="ov-markers">○</span>
     </div>
+    <div class="opt-row" onclick="toggleOverlay('tfsat')">
+      <span class="opt-icon">🛰️</span>
+      <div class="opt-text"><div class="opt-label">Sentiers sur satellite</div><div class="opt-desc">Thunderforest Outdoors · opacité 70%</div></div>
+      <span class="opt-arrow" id="ov-tfsat">○</span>
+    </div>
     <div class="opt-row" id="ov-restricted-row" onclick="toggleOverlay('restricted')">
       <span class="opt-icon">🚫</span>
       <div class="opt-text">
@@ -510,8 +515,8 @@ html, body { height: 100%; font-family: -apple-system, 'Segoe UI', Arial, sans-s
 <div id="startupPopup">
   <div class="popup-box">
     <h3>🥾 MapiBiBi — Bienvenue</h3>
-    <p style="font-size:12px;margin-bottom:6px;opacity:.6">v7.3 — Avril 2026</p>
-    <p>Nouveautés : <b>Boucle</b> — tracé en boucle depuis un point · distance cible en km · sentiers pédestres uniquement · routage ORS automatique.</p>
+    <p style="font-size:12px;margin-bottom:6px;opacity:.6">v7.4 — Avril 2026</p>
+    <p>Nouveautés : <b>Satellite ESRI</b> — fond de carte satellite gratuit · <b>Sentiers sur satellite</b> — surcouche Thunderforest 70% · <b>Boucle</b> — 2 points sur la carte, ORS calcule le circuit.</p>
     <p style="font-size:11px;margin-top:8px;opacity:.55">Tapez la carte pour tracer · swipez le panneau bas · ⚙️ Options pour les couches</p>
     <button onclick="closeStartupPopup()">C'est parti 🥾</button>
   </div>
@@ -552,10 +557,11 @@ const osmLayer=L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
 const tfLayer  = L.tileLayer("https://tile.thunderforest.com/outdoors/{z}/{x}/{y}.png?apikey=0ffff5950d8a4019bcede9aaeeecb57f",{maxZoom:22});
 const tflLayer = L.tileLayer("https://tile.thunderforest.com/landscape/{z}/{x}/{y}.png?apikey=0ffff5950d8a4019bcede9aaeeecb57f",{maxZoom:22});
 const satLayer = L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",{maxZoom:19,attribution:'Tiles © Esri'});
+const tfSatLayer = L.tileLayer("https://tile.thunderforest.com/outdoors/{z}/{x}/{y}.png?apikey=0ffff5950d8a4019bcede9aaeeecb57f",{maxZoom:22,opacity:0.7});
 const hikingOv=L.tileLayer("https://tile.waymarkedtrails.org/hiking/{z}/{x}/{y}.png",{maxZoom:18,opacity:.9});
 tfLayer.addTo(map); /* Thunderforest affiché par défaut */
 let curBase='tf';
-const ovState={hiking:false,route:true,markers:false,restricted:false};
+const ovState={hiking:false,route:true,markers:false,restricted:false,tfsat:false};
 
 let markers=L.layerGroup(); // points manuels — masqués par défaut, activables en Options
 let routeLayer=L.layerGroup().addTo(map);
@@ -1200,6 +1206,12 @@ function toggleOverlay(n){
     ovState.markers?markers.addTo(map):map.removeLayer(markers);
     ovState.markers?editPts.addTo(map):map.removeLayer(editPts);
     document.getElementById('ov-markers').textContent=ovState.markers?'●':'○';
+  }
+  if(n==='tfsat'){
+    ovState.tfsat?tfSatLayer.addTo(map):map.removeLayer(tfSatLayer);
+    const el=document.getElementById('ov-tfsat');
+    el.textContent=ovState.tfsat?'●':'○';
+    el.style.color=ovState.tfsat?'#52b788':'';
   }
   if(n==='restricted'){
     const el=document.getElementById('ov-restricted');
