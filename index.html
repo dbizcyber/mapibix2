@@ -538,6 +538,20 @@ html, body { height: 100%; font-family: -apple-system, 'Segoe UI', Arial, sans-s
   </div>
 </div>
 
+<div id="recRestorePopup" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,.65); align-items:center; justify-content:center; z-index:5000;">
+  <div class="popup-box">
+    <h3>📍 Enregistrement interrompu</h3>
+    <p id="rec-restore-info" style="font-size:13px; color:rgba(255,255,255,.65); margin-bottom:16px;"></p>
+    <button onclick="restaurerTraceLive(true)" style="width:100%; padding:12px; background:rgba(57,255,20,.15); border:none; border-radius:10px; color:#9aff72; font-size:14px; font-weight:600; cursor:pointer; margin-bottom:10px;">
+      ✅ Restaurer la trace
+      <span style="display:block; font-size:11px; font-weight:400; opacity:.7; margin-top:3px;">Reprendre depuis les points sauvegardés</span>
+    </button>
+    <button onclick="restaurerTraceLive(false)" style="width:100%; padding:12px; background:rgba(255,255,255,.08); border:none; border-radius:10px; color:rgba(255,255,255,.6); font-size:14px; font-weight:600; cursor:pointer;">
+      🗑️ Ignorer
+    </button>
+  </div>
+</div>
+
 <input type="file" id="importFile" accept=".gpx,application/gpx+xml,application/xml,text/xml">
 
 <div id="toast"></div>
@@ -673,7 +687,7 @@ if(navigator.geolocation){
           if(speed > MAX_SPEED){
             console.log(`[GPS] Point ignoré — vitesse aberrante: ${Math.round(speed*3.6)} km/h`);
           } else {
-            recTrace.push({lat,lng,ele:alt||0,acc:accuracy||0});
+            recTrace.push({lat,lng,ele:alt||0,acc:accuracy||0,t:now});
             _lastRecPos  = newLL;
             _lastRecTime = now;
             updateLiveTrace();
@@ -681,7 +695,7 @@ if(navigator.geolocation){
         }
       } else {
         /* Premier point de la trace */
-        recTrace.push({lat,lng,ele:alt||0,acc:accuracy||0});
+        recTrace.push({lat,lng,ele:alt||0,acc:accuracy||0,t:Date.now()});
         _lastRecPos  = newLL;
         _lastRecTime = now;
         updateLiveTrace();
@@ -1128,20 +1142,19 @@ function toggleAutoRecording(){
     livePolyline=null; routeLayer.clearLayers();
     btn.classList.add('recording');
     btn.querySelector('.tab-icon').textContent='⏹️';
-    /* Empêcher la mise en veille pendant l'enregistrement */
     activerWakeLock();
+    demarrerSauvegardeLive();
     showToast("Enregistrement GPS démarré");
   } else {
     btn.classList.remove('recording'); btn.querySelector('.tab-icon').textContent='⏺️';
     livePolyline=null;
-    /* Libérer le wake lock */
     desactiverWakeLock();
+    arreterSauvegardeLive();
+    nettoyerTraceLive();
     if(recTrace.length > 2){
-      /* Afficher le modal de choix */
       document.getElementById('rec-choix-info').textContent =
         `${recTrace.length} points enregistrés — comment afficher la trace ?`;
-      const pop = document.getElementById('recChoixPopup');
-      pop.style.display = 'flex';
+      document.getElementById('recChoixPopup').style.display = 'flex';
     } else {
       showToast(`Enregistrement arrêté — pas assez de points`);
     }
@@ -1178,6 +1191,62 @@ function desactiverWakeLock(){
 document.addEventListener('visibilitychange', async ()=>{
   if(document.visibilityState === 'visible' && gpsTracking) activerWakeLock();
 });
+
+/* ── SAUVEGARDE LIVE — survie au kill iOS ── */
+const REC_LIVE_KEY    = 'mapibibi_rec_live';
+const REC_ENCOURS_KEY = 'mapibibi_rec_encours';
+let _saveLiveTimer = null;
+
+function demarrerSauvegardeLive(){
+  /* Marquer l'enregistrement comme en cours */
+  try{ localStorage.setItem(REC_ENCOURS_KEY, '1'); }catch(e){}
+  /* Sauvegarder toutes les 15 secondes */
+  _saveLiveTimer = setInterval(()=>{
+    if(!gpsTracking || !recTrace.length) return;
+    try{ localStorage.setItem(REC_LIVE_KEY, JSON.stringify(recTrace)); }catch(e){}
+  }, 15000);
+}
+
+function arreterSauvegardeLive(){
+  if(_saveLiveTimer){ clearInterval(_saveLiveTimer); _saveLiveTimer = null; }
+}
+
+function nettoyerTraceLive(){
+  try{
+    localStorage.removeItem(REC_LIVE_KEY);
+    localStorage.removeItem(REC_ENCOURS_KEY);
+  }catch(e){}
+}
+
+
+function verifierTraceInterrompue(){
+  try{
+    const encours = localStorage.getItem(REC_ENCOURS_KEY);
+    if(!encours) return;
+    const raw = localStorage.getItem(REC_LIVE_KEY);
+    if(!raw) { nettoyerTraceLive(); return; }
+    const pts = JSON.parse(raw);
+    if(!pts || pts.length < 3){ nettoyerTraceLive(); return; }
+    window._ptsInterrompus = pts;
+    const dureeMin = (pts[0].t && pts[pts.length-1].t)
+      ? Math.round((pts[pts.length-1].t - pts[0].t) / 60000) : '?';
+    document.getElementById('rec-restore-info').textContent =
+      `${pts.length} points GPS sauvegardés${dureeMin !== '?' ? ' · ~' + dureeMin + ' min' : ''} — enregistrement interrompu (verrouillage ou fermeture app).`;
+    document.getElementById('recRestorePopup').style.display = 'flex';
+  }catch(e){ nettoyerTraceLive(); }
+}
+
+function restaurerTraceLive(oui){
+  document.getElementById('recRestorePopup').style.display = 'none';
+  nettoyerTraceLive();
+  if(!oui || !window._ptsInterrompus){ window._ptsInterrompus = null; return; }
+  recTrace = window._ptsInterrompus;
+  window._ptsInterrompus = null;
+  document.getElementById('rec-choix-info').textContent =
+    `${recTrace.length} points restaurés — comment afficher la trace ?`;
+  document.getElementById('recChoixPopup').style.display = 'flex';
+}
+
 
 /* ── AFFICHAGE APRÈS ENREGISTREMENT ── */
 function afficherTraceBrut(){
@@ -1689,6 +1758,8 @@ window.addEventListener('load',()=>{
   updateOnlineStatus();
   updateCounterUI();
   if(loadLocal()){ showToast("Trace restaurée"); showChartArea(true); }
+  /* Vérifier si un enregistrement a été interrompu (iOS kill) */
+  verifierTraceInterrompue();
   /* ── Enregistrement Service Worker avec détection de mise à jour ── */
   if('serviceWorker' in navigator){
     navigator.serviceWorker.register('./sw.js').then(reg => {
