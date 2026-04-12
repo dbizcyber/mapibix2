@@ -424,7 +424,8 @@ html, body { height: 100%; font-family: -apple-system, 'Segoe UI', Arial, sans-s
     border-radius:14px; color:#fc8181; font-size:16px;
     font-weight:700; cursor:pointer; letter-spacing:.02em;
   ">⏹ Arrêter l'enregistrement</button>
-  <p style="font-size:11px; color:rgba(255,255,255,.35); text-align:center; margin-top:12px;">
+  <p id="rp-save-status" style="font-size:11px; color:rgba(82,183,136,.7); text-align:center; margin-top:10px; min-height:16px;"></p>
+  <p style="font-size:11px; color:rgba(255,255,255,.35); text-align:center; margin-top:4px;">
     Gardez l'écran allumé sur iOS pour un tracé continu
   </p>
 </div>
@@ -558,8 +559,8 @@ html, body { height: 100%; font-family: -apple-system, 'Segoe UI', Arial, sans-s
 <div id="startupPopup">
   <div class="popup-box">
     <h3>🥾 MapiBiBi — Bienvenue</h3>
-    <p style="font-size:12px;margin-bottom:6px;opacity:.6">v7.6 — Avril 2026</p>
-    <p>Nouveautés : <b>Stats live</b> — distance · durée · D+/D- · vitesse pendant l'enregistrement · <b>panneau Enreg.</b> avec arrêt explicite · sauvegarde automatique anti-coupure iOS.</p>
+    <p style="font-size:12px;margin-bottom:6px;opacity:.6">v7.7 — Avril 2026</p>
+    <p>Corrections : <b>indicateur ⟳ ORS</b> pendant le calcul · <b>timeout 15s</b> sur les requêtes réseau · <b>gestion d'erreur cohérente</b> (plus d'alert) · <b>💾 sauvegardé il y a Xs</b> dans le panneau enreg. · <b>état centralisé</b> dans <code>state</code>.</p>
     <p style="font-size:11px;margin-top:8px;opacity:.55">Tapez la carte pour tracer · swipez le panneau bas · ⚙️ Options pour les couches</p>
     <button onclick="closeStartupPopup()">C'est parti 🥾</button>
   </div>
@@ -632,8 +633,7 @@ const satLayer = L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/servic
 const tfSatLayer = L.tileLayer("https://tile.thunderforest.com/outdoors/{z}/{x}/{y}.png?apikey=0ffff5950d8a4019bcede9aaeeecb57f",{maxZoom:22,opacity:0.7});
 const hikingOv=L.tileLayer("https://tile.waymarkedtrails.org/hiking/{z}/{x}/{y}.png",{maxZoom:18,opacity:.9});
 tfLayer.addTo(map); /* Thunderforest affiché par défaut */
-let curBase='tf';
-const ovState={hiking:false,route:true,markers:false,restricted:false,tfsat:false};
+/* curBase, ovState → dans state + aliases ci-dessus */
 
 let markers=L.layerGroup(); // points manuels — masqués par défaut, activables en Options
 let routeLayer=L.layerGroup().addTo(map);
@@ -643,8 +643,46 @@ let editPts=L.layerGroup(); // points de tracé — masqués par défaut
 let searchGrp=L.layerGroup().addTo(map);
 let restrictedLayer=L.layerGroup(); /* sentiers interdits — masqués par défaut */
 
-let manualPts=[],manualCoords=[];
-let startMarker=null, endMarker=null; /* marqueurs départ 🟢 / arrivée 🔴 */
+/* ══════════════════════════════════════════════════════
+   STATE — toutes les variables globales de l'application
+   Première étape vers l'architecture modulaire (§8 du doc)
+   ══════════════════════════════════════════════════════ */
+const state = {
+  /* Tracé manuel */
+  manualPts:     [],   /* waypoints envoyés à ORS [ [lng,lat], … ] */
+  manualCoords:  [],   /* coordonnées routées retournées [ [lat,lng,ele], … ] */
+  importedTrace: false,
+  userMovedMap:  false,
+
+  /* Enregistrement GPS */
+  gpsTracking:   false,
+  recTrace:      [],   /* points GPS bruts { lat,lng,ele,acc,t } */
+
+  /* Carte */
+  curBase:       'tf',
+  ovState: { hiking:false, route:true, markers:false, restricted:false, tfsat:false },
+
+  /* Mode boucle */
+  modeBoucle:    false,
+  boucleDepart:  null,
+
+  /* Mode ligne droite */
+  modeAB:        false,
+};
+
+/* Aliases directs pour compatibilité avec le code existant
+   (évite de réécrire chaque accès — sera supprimé lors de la distribution) */
+let manualPts      = state.manualPts;
+let manualCoords   = state.manualCoords;
+let importedTrace  = state.importedTrace;
+let userMovedMap   = state.userMovedMap;
+let gpsTracking    = state.gpsTracking;
+let recTrace       = state.recTrace;
+let curBase        = state.curBase;
+let ovState        = state.ovState;
+let modeBoucle     = state.modeBoucle;
+let boucleDepart   = state.boucleDepart;
+let modeAB         = state.modeAB;
 
 /* ── Compteurs de requêtes routage ── */
 const COUNTER_KEY = "mapibibi_route_counters";
@@ -686,14 +724,15 @@ function resetCounters(){
   updateCounterUI({ month:"", ors:0, valhalla:0 });
   showToast('Compteurs réinitialisés');
 }
-let A=null,B=null,mA=null,mB=null,sl=null,modeAB=false,importedTrace=false;
-let userMovedMap=false; /* true si l'utilisateur a bougé/zoomé manuellement */
+let A=null,B=null,mA=null,mB=null,sl=null;
+/* modeAB, importedTrace, userMovedMap → dans state + aliases ci-dessus */
 
 /* ── GPS ── */
 const MIN_DIST_M   = 5;    // seuil minimum de déplacement (mètres)
 const MAX_ACCURACY = 50;   // précision GPS minimale requise (mètres)
 const MAX_SPEED    = 55;   // vitesse max plausible en rando (m/s ≈ 200 km/h)
-let gpsMarker=null,gpsAttached=false,gpsTracking=false,recTrace=[];
+let gpsMarker=null,gpsAttached=false;
+/* gpsTracking, recTrace → dans state + aliases ci-dessus */
 let livePolyline=null; /* trace GPS en temps réel */
 let _lastRecPos=null, _lastRecTime=0;
 
@@ -1341,6 +1380,9 @@ function mettreAJourStatsLive(){
   document.getElementById('rp-pts').textContent  = recTrace.length;
   document.getElementById('rp-spd').textContent  = spdInst;
   document.getElementById('rp-avg').textContent  = spdAvg;
+
+  /* Rafraîchir le "il y a Xs" de l'indicateur sauvegarde */
+  mettreAJourIndicateurSauvegarde();
 }
 
 /* ── WAKE LOCK — empêche la mise en veille pendant l'enregistrement ── */
@@ -1378,15 +1420,31 @@ document.addEventListener('visibilitychange', async ()=>{
 const REC_LIVE_KEY    = 'mapibibi_rec_live';
 const REC_ENCOURS_KEY = 'mapibibi_rec_encours';
 let _saveLiveTimer = null;
+let _derniereSauvegarde = null; /* timestamp de la dernière sauvegarde réussie */
 
 function demarrerSauvegardeLive(){
-  /* Marquer l'enregistrement comme en cours */
   try{ localStorage.setItem(REC_ENCOURS_KEY, '1'); }catch(e){}
-  /* Sauvegarder toutes les 15 secondes */
+  _derniereSauvegarde = null;
   _saveLiveTimer = setInterval(()=>{
     if(!gpsTracking || !recTrace.length) return;
-    try{ localStorage.setItem(REC_LIVE_KEY, JSON.stringify(recTrace)); }catch(e){}
+    try{
+      localStorage.setItem(REC_LIVE_KEY, JSON.stringify(recTrace));
+      _derniereSauvegarde = Date.now();
+      mettreAJourIndicateurSauvegarde();
+    }catch(e){
+      const el = document.getElementById('rp-save-status');
+      if(el) el.textContent = '⚠ Sauvegarde impossible — mémoire pleine ?';
+    }
   }, 15000);
+}
+
+function mettreAJourIndicateurSauvegarde(){
+  const el = document.getElementById('rp-save-status');
+  if(!el || !_derniereSauvegarde) return;
+  const secAgo = Math.round((Date.now() - _derniereSauvegarde) / 1000);
+  el.textContent = secAgo < 5
+    ? '💾 Trace sauvegardée'
+    : `💾 Sauvegardée il y a ${secAgo}s`;
 }
 
 function arreterSauvegardeLive(){
@@ -1838,8 +1896,7 @@ if('serviceWorker' in navigator){
   });
 }
 /* ── BOUCLE ── */
-let modeBoucle   = false;
-let boucleDepart = null;   /* [lng, lat] */
+/* modeBoucle, boucleDepart → dans state + aliases ci-dessus */
 let boucleMarkerD = null;  /* marqueur provisoire départ boucle */
 let boucleMarkerA = null;  /* marqueur provisoire arrivée boucle */
 
