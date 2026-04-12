@@ -146,6 +146,8 @@ html, body { height: 100%; font-family: -apple-system, 'Segoe UI', Arial, sans-s
 .tab#tab-rec.recording { color: var(--red); }
 .tab#tab-rec.recording .tab-icon { animation: pulse 1.2s infinite; }
 @keyframes pulse { 0%,100%{transform:scale(1)} 50%{transform:scale(1.18)} }
+@keyframes ors-blink { 0%,100%{opacity:1} 50%{opacity:.4} }
+#ors-indicator { animation: ors-blink 1s ease-in-out infinite; }
 
 /* STATS / OPTIONS PANELS */
 .side-panel {
@@ -326,7 +328,8 @@ html, body { height: 100%; font-family: -apple-system, 'Segoe UI', Arial, sans-s
     Dist&nbsp;<b id="stat-dist">—</b>&nbsp;km &nbsp;
     D+&nbsp;<b id="stat-dp">—</b>&nbsp;m &nbsp;
     D-&nbsp;<b id="stat-dm">—</b>&nbsp;m &nbsp;
-    IBP&nbsp;<b id="stat-ibp">—</b>
+    <span id="ors-indicator" style="display:none; color:#52b788; font-size:11px;">⟳ ORS…</span>
+    <span id="stat-ibp-wrap">IBP&nbsp;<b id="stat-ibp">—</b></span>
   </div>
   <!-- Peek live (enregistrement en cours) — masqué par défaut -->
   <div class="sheet-peek" id="peek-live" style="display:none; color:#fc8181;">
@@ -790,6 +793,26 @@ function drawElevation(elevs,lls=[]){
   chart2=new Chart(c2,JSON.parse(JSON.stringify(cfg)));
 }
 
+/* ── INDICATEUR CHARGEMENT ORS ── */
+function setLoading(on, errMsg){
+  const ind  = document.getElementById('ors-indicator');
+  const ibp  = document.getElementById('stat-ibp-wrap');
+  const stat = document.getElementById('importStatus');
+  if(on){
+    if(ind) { ind.style.display='inline'; ind.textContent='⟳ ORS…'; }
+    if(ibp) ibp.style.display='none';
+    if(stat){ stat.textContent=''; stat.style.color=''; }
+  } else {
+    if(ind) ind.style.display='none';
+    if(ibp) ibp.style.display='inline';
+    if(errMsg && stat){
+      stat.textContent = errMsg;
+      stat.style.color = '#fc8181';
+      setTimeout(()=>{ stat.textContent=''; stat.style.color=''; }, 4000);
+    }
+  }
+}
+
 /* ── ROUTAGE via proxy Supabase (ORS ≤48pts / Valhalla >48pts) ── */
 let _routeAbort = null;  /* AbortController courant */
 
@@ -801,8 +824,10 @@ async function rebuildRoute(){
 
   if(manualPts.length<2){
     routeLayer.clearLayers(); editMarkers.clearLayers(); editPts.clearLayers(); manualCoords=[];
-    drawElevation([],[]); saveLocal(); return;
+    drawElevation([],[]); saveLocal(); setLoading(false); return;
   }
+
+  setLoading(true);
 
   /* Snapshot des points au moment du calcul */
   const pts = manualPts.slice();
@@ -826,10 +851,17 @@ async function rebuildRoute(){
     incrementCounter(d.engine || "valhalla");
     console.log(`[Route] ${engine} OK — ${d.coords.length} pts, ${pts.length} waypoints`);
   }catch(e){
-    if(e.name === "AbortError"){ console.log("[Route] annulé — nouveau calcul"); return; }
+    if(e.name === "AbortError"){
+      console.log("[Route] annulé — nouveau calcul");
+      /* Pas de setLoading(false) ici — le nouveau calcul va le faire */
+      return;
+    }
     console.error("[Route] Proxy échoué:", e.message);
-    showToast("Erreur calcul d'itinéraire");
+    setLoading(false, '⚠ Erreur réseau — vérifiez la connexion');
+    return;
   }
+
+  setLoading(false);
 
   /* Ignorer si ce calcul a été supplanté par un plus récent */
   if(ctrl.signal.aborted) return;
