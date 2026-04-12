@@ -684,6 +684,10 @@ let modeBoucle     = state.modeBoucle;
 let boucleDepart   = state.boucleDepart;
 let modeAB         = state.modeAB;
 
+/* Marqueurs Leaflet — non inclus dans state (objets non sérialisables) */
+let startMarker = null;
+let endMarker   = null;
+
 /* ── Compteurs de requêtes routage ── */
 const COUNTER_KEY = "mapibibi_route_counters";
 function loadCounters(){
