@@ -834,14 +834,23 @@ async function rebuildRoute(){
   let ok = false;
   let newCoords = [];
 
+  /* ── Timeout 15s — évite les blocages silencieux en zone réseau faible ── */
+  const TIMEOUT_MS = 15000;
+  let _timeoutId = null;
+  const timeoutPromise = new Promise((_, reject) => {
+    _timeoutId = setTimeout(() => reject(new Error('timeout')), TIMEOUT_MS);
+  });
+
   /* ── Proxy Supabase : ORS (≤48 pts) ou Valhalla (>48 pts) ── */
   try{
-    const r = await fetch(VALHALLA_URL, {
+    const fetchPromise = fetch(VALHALLA_URL, {
       method: "POST",
       signal: ctrl.signal,
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ locations: pts })
     });
+    const r = await Promise.race([fetchPromise, timeoutPromise]);
+    clearTimeout(_timeoutId);
     if(!r.ok) throw new Error("Proxy " + r.status);
     const d = await r.json();
     if(!d.coords || !d.coords.length) throw new Error("Réponse vide");
@@ -851,9 +860,15 @@ async function rebuildRoute(){
     incrementCounter(d.engine || "valhalla");
     console.log(`[Route] ${engine} OK — ${d.coords.length} pts, ${pts.length} waypoints`);
   }catch(e){
+    clearTimeout(_timeoutId);
     if(e.name === "AbortError"){
       console.log("[Route] annulé — nouveau calcul");
       /* Pas de setLoading(false) ici — le nouveau calcul va le faire */
+      return;
+    }
+    if(e.message === 'timeout'){
+      console.warn("[Route] Timeout 15s — réseau trop lent");
+      setLoading(false, '⚠ Délai dépassé — réseau trop lent, réessayez');
       return;
     }
     console.error("[Route] Proxy échoué:", e.message);
