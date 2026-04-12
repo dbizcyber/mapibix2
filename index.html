@@ -1004,16 +1004,21 @@ function gpx2geo(xml){ if(window.toGeoJSON&&typeof window.toGeoJSON.gpx==="funct
 async function handleImport(file){
   if(!file) return;
   const st=document.getElementById('importStatus');
+  const setImportError = (msg) => {
+    st.textContent = '❌ ' + msg;
+    st.style.color = '#fc8181';
+    setTimeout(()=>{ st.textContent=''; st.style.color=''; }, 5000);
+  };
   try{
-    st.textContent='Import en cours…';
+    st.textContent='Import en cours…'; st.style.color='';
     const text=await readFileText(file);
     const isGPX=(file.name&&file.name.toLowerCase().endsWith(".gpx"))||(typeof text==="string"&&(text.trim().startsWith("<gpx")||text.includes("<trk")||text.includes("<trkpt")));
     let geo=isGPX?gpx2geo(new DOMParser().parseFromString(text,"text/xml")):JSON.parse(text);
-    if(!geo||!geo.features||!geo.features.length){ st.textContent='Aucune trace'; alert("Aucune trace exploitable."); return; }
+    if(!geo||!geo.features||!geo.features.length){ setImportError('Aucune trace exploitable'); return; }
     manualPts=[]; manualCoords=[]; routeLayer.clearLayers(); markers.clearLayers(); editMarkers.clearLayers();
     let coords=[];
     geo.features.forEach(f=>{ if(!f.geometry) return; if(f.geometry.type==="LineString") coords.push(...f.geometry.coordinates); if(f.geometry.type==="MultiLineString") f.geometry.coordinates.forEach(s=>coords.push(...s)); });
-    if(!coords.length){ st.textContent='Trace non lisible'; alert("Trace non lisible."); return; }
+    if(!coords.length){ setImportError('Trace non lisible — format non reconnu'); return; }
     // Interpoler les altitudes manquantes (évite les chutes fictives vers 0)
     const rawEle=coords.map(c=>c.length>=3&&c[2]!=null&&c[2]!==0?c[2]:null);
     for(let i=0;i<rawEle.length;i++){
@@ -1031,10 +1036,11 @@ async function handleImport(file){
     L.polyline(lls,{color:"red",weight:4}).addTo(routeLayer);
     mkEditable(lls); updateStartEndMarkers(lls); map.fitBounds(lls,{padding:[20,20]});
     drawElevation(manualCoords.map(c=>c[2]||0),lls);
-    importedTrace=true; userMovedMap=false; st.textContent='✅ Import OK';
-    setTimeout(()=>st.textContent='',2000);
+    importedTrace=true; userMovedMap=false;
+    st.textContent='✅ Import OK'; st.style.color='#52b788';
+    setTimeout(()=>{ st.textContent=''; st.style.color=''; },2000);
     showChartArea(true);
-  }catch(e){ console.error("Import:",e); st.textContent='Erreur import'; alert("Erreur : "+e.message); }
+  }catch(e){ console.error("Import:",e); setImportError(e.message || 'Erreur inconnue'); }
 }
 function triggerImport(){ document.getElementById('importFile').value=''; document.getElementById('importFile').click(); }
 document.getElementById('importFile').addEventListener('change',e=>{ const f=e.target.files&&e.target.files[0]; if(f) handleImport(f); });
@@ -1439,12 +1445,18 @@ function afficherTraceBrut(){
 
 async function afficherTraceSentiers(){
   document.getElementById('recChoixPopup').style.display = 'none';
-  /* Simplifier recTrace : garder au max 40 points équidistants */
   const pts = simplifierTrace(recTrace, 40);
   manualPts = pts.map(p=>[p.lng, p.lat]);
   routeLayer.clearLayers(); editMarkers.clearLayers();
+  const coordsAvant = manualCoords.length;
   showToast('⏳ Recalcul sur les sentiers…', 4000);
   await rebuildRoute();
+  /* Si manualCoords n'a pas été mis à jour → ORS a échoué → basculer sur brut */
+  if(manualCoords.length === coordsAvant && recTrace.length > 0){
+    showToast('⚠ ORS indisponible — tracé GPS brut affiché', 4000);
+    afficherTraceBrut();
+    return;
+  }
   showChartArea(true);
 }
 
@@ -1642,7 +1654,11 @@ async function loadRestrictedPaths(){
 
   } catch(e) {
     console.error('Overpass restricted:', e);
-    desc.textContent = 'Erreur chargement — ' + e.message;
+    const msg = e.message === 'timeout' ? 'Délai dépassé — réseau lent'
+              : !navigator.onLine ? 'Hors-ligne — données indisponibles'
+              : 'Erreur chargement (' + e.message + ')';
+    desc.textContent = '⚠ ' + msg;
+    showToast('⚠ Sentiers interdits : ' + msg, 3500);
   } finally {
     _restrictedLoading = false;
   }
@@ -1890,21 +1906,25 @@ function boucleHandleTap(latlng){
 }
 
 async function genererBoucle(depart, arrivee){
-  /* Retirer les marqueurs provisoires — rebuildRoute posera D/A définitifs */
   if(boucleMarkerD){ map.removeLayer(boucleMarkerD); boucleMarkerD = null; }
   if(boucleMarkerA){ map.removeLayer(boucleMarkerA); boucleMarkerA = null; }
 
-  /* Calcul du pivot perpendiculaire au milieu D-A, décalé de |DA|/2 */
   const pivot = calculerPivot(depart, arrivee);
-
-  /* Waypoints : D → pivot → A → D  (boucle fermée) */
   manualPts = [ depart, pivot, arrivee, [depart[0], depart[1]] ];
   routeLayer.clearLayers(); editMarkers.clearLayers();
 
+  const coordsAvant = manualCoords.length;
   await rebuildRoute();
 
+  /* Si rebuildRoute() a échoué (timeout, réseau) → manualCoords inchangé */
+  if(manualCoords.length === coordsAvant){
+    setBoucleStatus('❌ Calcul échoué — vérifiez la connexion');
+    /* Laisser le panneau ouvert pour que l'utilisateur puisse réessayer */
+    document.getElementById('boucle-annuler-btn').style.display = 'inline-block';
+    return;
+  }
+
   setBoucleStatus('✅ Boucle calculée');
-  /* Refermer le panneau après 2s */
   setTimeout(()=>{ annulerBoucle(); showChartArea(true); }, 2000);
 }
 
